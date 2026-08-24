@@ -1,4 +1,3 @@
-
 const socket = io({
     transports: ['polling', 'websocket'],
     upgrade: true,
@@ -437,11 +436,33 @@ searchInput.addEventListener('keypress', (e) => {
 function handleSearch() {
     const q = searchInput.value.trim();
     if (!q) return;
+
     const videoId = extractVideoId(q);
     if (videoId) {
-        loadVideo(videoId, 'YouTube Video');
-        searchInput.value = '';
-        searchResults.innerHTML = '';
+        searchResults.innerHTML =
+            '<div class="search-item" style="padding:12px;">' +
+            '<div class="info"><div class="title">YouTube link</div>' +
+            '<div class="channel">' + escapeHtml(videoId) + '</div>' +
+            '<div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;">' +
+            '<button type="button" class="mini-btn" id="urlPlayBtn">▶ Play now</button>' +
+            '<button type="button" class="mini-btn" id="urlQueueBtn">＋ Add to queue</button>' +
+            '</div></div></div>';
+
+        document.getElementById('urlPlayBtn').onclick = () => {
+            loadVideo(videoId, 'YouTube Video');
+            searchInput.value = '';
+            searchResults.innerHTML = '';
+        };
+        document.getElementById('urlQueueBtn').onclick = () => {
+            socket.emit('queue_add', {
+                room_id: ROOM_ID,
+                video_id: videoId,
+                title: 'YouTube · ' + videoId
+            });
+            showSystemMessage('Added to queue');
+            searchInput.value = '';
+            searchResults.innerHTML = '';
+        };
         return;
     }
     performSearch(q);
