@@ -48,6 +48,7 @@ def get_or_create_room(room_id):
             'notes': '',
             'todos': [],
             'last_seen': {},
+            'voice': set(),
             'created_at': datetime.utcnow().isoformat()
         }
     room = rooms[room_id]
@@ -55,6 +56,7 @@ def get_or_create_room(room_id):
     room.setdefault('todos', [])
     room.setdefault('last_seen', {})
     room.setdefault('moods', {})
+    room.setdefault('voice', set())
     return room
 
 
@@ -118,6 +120,10 @@ def handle_connect():
 @socketio.on('disconnect')
 def handle_disconnect():
     for room_id, room in list(rooms.items()):
+        if request.sid in room.get('voice', set()):
+            room['voice'].discard(request.sid)
+            emit('voice_left', {'sid': request.sid}, room=room_id, include_self=False)
+
         if request.sid in room['users']:
             username = room['users'][request.sid]['name']
             del room['users'][request.sid]
@@ -232,11 +238,11 @@ def handle_chat(data):
             return
         body = message[:300]
         media_out = None
-    elif msg_type in ('image', 'voice'):
+    elif msg_type == 'image':
         if not media or not isinstance(media, str) or len(media) > 900000:
             emit('error_msg', {'text': 'File too large or invalid'})
             return
-        body = message[:100] if message else ('📷 Photo' if msg_type == 'image' else '🎤 Voice')
+        body = message[:100] if message else '📷 Photo'
         media_out = media
     else:
         return
@@ -345,6 +351,48 @@ def handle_heartbeat(data):
             'users': list(room['users'].values()),
             'moods': room.get('moods', {})
         }, room=room_id)
+
+
+# ========== LIVE VOICE (WebRTC signaling) ==========
+
+@socketio.on('voice_join')
+def handle_voice_join(data):
+    room_id = data.get('room_id')
+    room = get_or_create_room(room_id)
+    if request.sid not in room['users']:
+        return
+
+    peers = [s for s in room['voice'] if s != request.sid]
+    room['voice'].add(request.sid)
+
+    # existing peers → joiner (joiner will send offers)
+    emit('voice_peers', {'peers': peers})
+
+    # notify others someone joined voice
+    emit('voice_user_joined', {
+        'sid': request.sid,
+        'name': room['users'][request.sid]['name']
+    }, room=room_id, include_self=False)
+
+
+@socketio.on('voice_leave')
+def handle_voice_leave(data):
+    room_id = data.get('room_id')
+    room = get_or_create_room(room_id)
+    room['voice'].discard(request.sid)
+    emit('voice_left', {'sid': request.sid}, room=room_id, include_self=False)
+
+
+@socketio.on('webrtc_signal')
+def handle_webrtc_signal(data):
+    target = data.get('to')
+    signal = data.get('signal')
+    if not target or not signal:
+        return
+    emit('webrtc_signal', {
+        'from': request.sid,
+        'signal': signal
+    }, to=target)
 
 
 if __name__ == '__main__':
