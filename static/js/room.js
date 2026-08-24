@@ -37,8 +37,23 @@ const todoAddBtn = document.getElementById('todoAddBtn');
 const todoList = document.getElementById('todoList');
 const photoInput = document.getElementById('photoInput');
 const photoBtn = document.getElementById('photoBtn');
-const voiceBtn = document.getElementById('voiceBtn');
-const voiceStatus = document.getElementById('voiceStatus');
+
+const micOnBtn = document.getElementById('micOnBtn');
+const micMuteBtn = document.getElementById('micMuteBtn');
+const micOffBtn = document.getElementById('micOffBtn');
+const voiceLiveStatus = document.getElementById('voiceLiveStatus');
+const remoteAudios = document.getElementById('remoteAudios');
+
+let localStream = null;
+let voiceMuted = false;
+const pcs = {};
+
+const iceConfig = {
+    iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' }
+    ]
+};
 
 function onYouTubeIframeAPIReady() {
     player = new YT.Player('player', {
@@ -259,8 +274,6 @@ function appendMessage(msg) {
     let body = '';
     if (msg.type === 'image' && msg.media) {
         body = '<img class="chat-img" src="' + msg.media + '" alt="photo">';
-    } else if (msg.type === 'voice' && msg.media) {
-        body = '<audio class="chat-audio" controls src="' + msg.media + '"></audio>';
     } else {
         body = '<div class="msg-body">' + escapeHtml(msg.message || '') + '</div>';
     }
@@ -449,7 +462,7 @@ document.querySelectorAll('.react-btn').forEach((btn) => {
     });
 });
 
-document.querySelectorAll('.mood-btn').forEach((btn) => {
+document.querySelectorAll('.mood-btn[data-mood]').forEach((btn) => {
     btn.addEventListener('click', () => {
         socket.emit('set_mood', { room_id: ROOM_ID, mood: btn.dataset.mood });
     });
@@ -514,69 +527,188 @@ if (photoBtn && photoInput) {
             alert('Could not send photo');
         }
     });
-} else {
-    console.warn('photoBtn/photoInput missing in HTML');
 }
 
-let mediaRecorder = null;
-let audioChunks = [];
-let recording = false;
+/* ========== LIVE CALL (WebRTC) ========== */
+function setVoiceUI(state) {
+    if (!micOnBtn) return;
+    if (state === 'off') {
+        micOnBtn.disabled = false;
+        micMuteBtn.disabled = true;
+        micOffBtn.disabled = true;
+        micMuteBtn.textContent = '🔇 Mute';
+        if (voiceLiveStatus) voiceLiveStatus.textContent = 'Mic off';
+    } else if (state === 'live') {
+        micOnBtn.disabled = true;
+        micMuteBtn.disabled = false;
+        micOffBtn.disabled = false;
+        micMuteBtn.textContent = '🔇 Mute';
+        if (voiceLiveStatus) voiceLiveStatus.textContent = 'Live — others can hear you';
+    } else if (state === 'muted') {
+        micOnBtn.disabled = true;
+        micMuteBtn.disabled = false;
+        micOffBtn.disabled = false;
+        micMuteBtn.textContent = '🎙 Unmute';
+        if (voiceLiveStatus) voiceLiveStatus.textContent = 'Muted';
+    }
+}
 
-if (voiceBtn) {
-    voiceBtn.addEventListener('click', async () => {
-        if (recording) {
-            if (mediaRecorder && mediaRecorder.state === 'recording') mediaRecorder.stop();
-            recording = false;
-            voiceBtn.textContent = '🎤';
-            if (voiceStatus) voiceStatus.textContent = 'Sending...';
-            return;
+function ensureAudioEl(sid) {
+    if (!remoteAudios) return null;
+    let el = document.getElementById('audio-' + sid);
+    if (!el) {
+        el = document.createElement('audio');
+        el.id = 'audio-' + sid;
+        el.autoplay = true;
+        el.playsInline = true;
+        remoteAudios.appendChild(el);
+    }
+    return el;
+}
+
+function removeAudioEl(sid) {
+    const el = document.getElementById('audio-' + sid);
+    if (el) el.remove();
+}
+
+function createPeerConnection(sid) {
+    if (pcs[sid]) return pcs[sid];
+    const pc = new RTCPeerConnection(iceConfig);
+    pcs[sid] = pc;
+
+    if (localStream) {
+        localStream.getTracks().forEach((track) => pc.addTrack(track, localStream));
+    }
+
+    pc.ontrack = (event) => {
+        const el = ensureAudioEl(sid);
+        if (el) {
+            el.srcObject = event.streams[0];
+            el.play().catch(() => {});
         }
+    };
+
+    pc.onicecandidate = (event) => {
+        if (event.candidate) {
+            socket.emit('webrtc_signal', {
+                to: sid,
+                signal: { type: 'ice', candidate: event.candidate }
+            });
+        }
+    };
+
+    pc.onconnectionstatechange = () => {
+        if (pc.connectionState === 'failed' || pc.connectionState === 'closed' || pc.connectionState === 'disconnected') {
+            closePeer(sid);
+        }
+    };
+
+    return pc;
+}
+
+async function callPeer(sid) {
+    try {
+        const pc = createPeerConnection(sid);
+        const offer = await pc.createOffer({ offerToReceiveAudio: true });
+        await pc.setLocalDescription(offer);
+        socket.emit('webrtc_signal', {
+            to: sid,
+            signal: { type: 'offer', sdp: pc.localDescription }
+        });
+    } catch (e) {
+        console.error('callPeer', e);
+    }
+}
+
+async function handleSignal(from, signal) {
+    const pc = createPeerConnection(from);
+    if (signal.type === 'offer') {
+        await pc.setRemoteDescription(new RTCSessionDescription(signal.sdp));
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        socket.emit('webrtc_signal', {
+            to: from,
+            signal: { type: 'answer', sdp: pc.localDescription }
+        });
+    } else if (signal.type === 'answer') {
+        await pc.setRemoteDescription(new RTCSessionDescription(signal.sdp));
+    } else if (signal.type === 'ice' && signal.candidate) {
         try {
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            audioChunks = [];
-            mediaRecorder = new MediaRecorder(stream);
-            mediaRecorder.ondataavailable = (e) => {
-                if (e.data && e.data.size > 0) audioChunks.push(e.data);
-            };
-            mediaRecorder.onstop = () => {
-                stream.getTracks().forEach((t) => t.stop());
-                const blob = new Blob(audioChunks, { type: 'audio/webm' });
-                if (blob.size > 700000) {
-                    alert('Voice too large');
-                    if (voiceStatus) voiceStatus.textContent = '';
-                    return;
-                }
-                const reader = new FileReader();
-                reader.onloadend = () => {
-                    socket.emit('chat_message', {
-                        room_id: ROOM_ID,
-                        type: 'voice',
-                        message: '',
-                        media: reader.result
-                    });
-                    if (voiceStatus) voiceStatus.textContent = '';
-                };
-                reader.readAsDataURL(blob);
-            };
-            mediaRecorder.start();
-            recording = true;
-            voiceBtn.textContent = '⏹';
-            if (voiceStatus) voiceStatus.textContent = 'Recording... tap again to stop';
-            setTimeout(() => {
-                if (recording && mediaRecorder && mediaRecorder.state === 'recording') {
-                    mediaRecorder.stop();
-                    recording = false;
-                    voiceBtn.textContent = '🎤';
-                }
-            }, 30000);
-        } catch (e) {
-            alert('Mic permission needed (use HTTPS)');
-            console.error(e);
-        }
-    });
-} else {
-    console.warn('voiceBtn missing in HTML');
+            await pc.addIceCandidate(new RTCIceCandidate(signal.candidate));
+        } catch (e) {}
+    }
 }
+
+function closePeer(sid) {
+    if (pcs[sid]) {
+        try { pcs[sid].close(); } catch (e) {}
+        delete pcs[sid];
+    }
+    removeAudioEl(sid);
+}
+
+function closeAllPeers() {
+    Object.keys(pcs).forEach(closePeer);
+}
+
+async function startMic() {
+    try {
+        localStream = await navigator.mediaDevices.getUserMedia({
+            audio: { echoCancellation: true, noiseSuppression: true },
+            video: false
+        });
+        voiceMuted = false;
+        setVoiceUI('live');
+        socket.emit('voice_join', { room_id: ROOM_ID });
+    } catch (e) {
+        alert('Mic permission needed (use HTTPS)');
+        console.error(e);
+        setVoiceUI('off');
+    }
+}
+
+function toggleMute() {
+    if (!localStream) return;
+    voiceMuted = !voiceMuted;
+    localStream.getAudioTracks().forEach((t) => { t.enabled = !voiceMuted; });
+    setVoiceUI(voiceMuted ? 'muted' : 'live');
+}
+
+function stopMic() {
+    if (localStream) {
+        localStream.getTracks().forEach((t) => t.stop());
+        localStream = null;
+    }
+    closeAllPeers();
+    socket.emit('voice_leave', { room_id: ROOM_ID });
+    voiceMuted = false;
+    setVoiceUI('off');
+}
+
+if (micOnBtn) micOnBtn.addEventListener('click', startMic);
+if (micMuteBtn) micMuteBtn.addEventListener('click', toggleMute);
+if (micOffBtn) micOffBtn.addEventListener('click', stopMic);
+
+socket.on('voice_peers', async (data) => {
+    for (const sid of (data.peers || [])) {
+        await callPeer(sid);
+    }
+});
+
+socket.on('voice_left', (data) => {
+    if (data && data.sid) closePeer(data.sid);
+});
+
+socket.on('webrtc_signal', async (data) => {
+    if (!data || !data.from || !data.signal) return;
+    try {
+        await handleSignal(data.from, data.signal);
+    } catch (e) {
+        console.error('webrtc', e);
+    }
+});
+
+setVoiceUI('off');
 
 setInterval(() => {
     if (socket.connected) socket.emit('heartbeat', { room_id: ROOM_ID });
@@ -592,6 +724,7 @@ function copyRoomCode() {
 
 function leaveRoom() {
     if (confirm('Leave this room?')) {
+        stopMic();
         socket.disconnect();
         window.location.href = '/';
     }
