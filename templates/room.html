@@ -20,13 +20,14 @@
         .todo-item.done{opacity:.55;text-decoration:line-through}
         .mood-row{display:flex;flex-wrap:wrap;gap:6px}
         .mood-btn{border:none;border-radius:999px;padding:6px 10px;cursor:pointer;background:rgba(255,255,255,.12);color:inherit}
+        .mood-btn:disabled{opacity:.4;cursor:not-allowed}
         .topbar-actions{display:flex;align-items:center;gap:6px}
         .mini-btn{border:none;border-radius:8px;padding:6px 8px;cursor:pointer;background:rgba(255,255,255,.12);color:inherit;font-size:.8rem}
         .chat-input-row{display:flex;gap:6px;align-items:center}
         .chat-input-row input[type=text]{flex:1}
         .chat-img{max-width:100%;border-radius:10px;margin-top:4px;display:block}
-        .chat-audio{width:100%;margin-top:4px}
-        #voiceStatus{font-size:.75rem;opacity:.75;margin:4px 0 0}
+        #voiceLiveStatus{font-size:.8rem;opacity:.8;margin:0 0 8px}
+        #remoteAudios audio{display:none}
     </style>
 </head>
 <body class="room-page">
@@ -93,6 +94,17 @@
                 <div class="users-list" id="usersList"></div>
             </div>
 
+            <div class="tools-card" id="liveVoiceCard">
+                <h3>Live talk</h3>
+                <p id="voiceLiveStatus">Mic off</p>
+                <div class="mood-row">
+                    <button type="button" class="mood-btn" id="micOnBtn">🎙 Mic On</button>
+                    <button type="button" class="mood-btn" id="micMuteBtn" disabled>🔇 Mute</button>
+                    <button type="button" class="mood-btn" id="micOffBtn" disabled>⏹ Off</button>
+                </div>
+                <div id="remoteAudios"></div>
+            </div>
+
             <div class="tools-card">
                 <h3>Mood</h3>
                 <div class="mood-row">
@@ -121,11 +133,9 @@
                 <div class="chat-input-row">
                     <input type="file" id="photoInput" accept="image/*" hidden>
                     <button type="button" class="mini-btn" id="photoBtn" title="Photo">📷</button>
-                    <button type="button" class="mini-btn" id="voiceBtn" title="Voice note">🎤</button>
                     <input type="text" id="chatInput" placeholder="Type a message..." maxlength="300" autocomplete="off">
                     <button id="sendBtn">➤</button>
                 </div>
-                <p id="voiceStatus"></p>
             </div>
         </section>
     </main>
