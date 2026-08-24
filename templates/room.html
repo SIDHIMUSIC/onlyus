@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -9,6 +10,20 @@
     <link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@400;500;600;700&family=Playfair+Display:wght@500;600&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js"></script>
+    <style>
+        .tools-card{background:rgba(0,0,0,.25);border-radius:12px;padding:12px;margin-bottom:10px}
+        .tools-card h3{margin:0 0 8px;font-size:.9rem}
+        #sharedNotes{width:100%;border-radius:8px;border:none;padding:8px;resize:vertical;background:rgba(255,255,255,.08);color:inherit;box-sizing:border-box}
+        .todo-add-row{display:flex;gap:6px}
+        .todo-add-row input{flex:1;border-radius:8px;border:none;padding:8px;background:rgba(255,255,255,.08);color:inherit}
+        .todo-list{list-style:none;padding:0;margin:8px 0 0}
+        .todo-item{display:flex;justify-content:space-between;align-items:center;gap:8px;margin:4px 0;font-size:.9rem}
+        .todo-item.done{opacity:.55;text-decoration:line-through}
+        .mood-row{display:flex;flex-wrap:wrap;gap:6px}
+        .mood-btn{border:none;border-radius:999px;padding:6px 10px;cursor:pointer;background:rgba(255,255,255,.12);color:inherit}
+        .topbar-actions{display:flex;align-items:center;gap:6px}
+        .mini-btn{border:none;border-radius:8px;padding:6px 8px;cursor:pointer;background:rgba(255,255,255,.12);color:inherit;font-size:.8rem}
+    </style>
 </head>
 <body class="room-page">
     <div class="bg-orbs">
@@ -27,8 +42,8 @@
             <span id="userCount">0/10</span>
         </div>
         <div class="topbar-actions">
-            <button type="button" class="mini-btn" onclick="copyRoomCode()" title="Copy room code">📋 Code</button>
-            <button type="button" class="mini-btn" onclick="leaveRoom()" title="Leave">Leave</button>
+            <button type="button" class="mini-btn" onclick="copyRoomCode()">📋 Code</button>
+            <button type="button" class="mini-btn" onclick="leaveRoom()">Leave</button>
             <div class="user-badge" id="myName">{{ username }}</div>
         </div>
     </header>
@@ -64,7 +79,6 @@
                     <input type="text" id="searchInput" placeholder="Search song or paste YouTube URL..." autocomplete="off">
                     <button id="searchBtn">Search</button>
                 </div>
-
                 <div class="search-results" id="searchResults"></div>
             </div>
 
@@ -80,6 +94,29 @@
             <div class="presence-card">
                 <h3>Online now</h3>
                 <div class="users-list" id="usersList"></div>
+            </div>
+
+            <div class="tools-card">
+                <h3>Mood</h3>
+                <div class="mood-row">
+                    <button type="button" class="mood-btn" data-mood="free">🟢 Free</button>
+                    <button type="button" class="mood-btn" data-mood="busy">🟡 Busy</button>
+                    <button type="button" class="mood-btn" data-mood="sleeping">😴 Sleeping</button>
+                </div>
+            </div>
+
+            <div class="tools-card">
+                <h3>Shared notes</h3>
+                <textarea id="sharedNotes" rows="4" placeholder="Notes for everyone in this room..."></textarea>
+            </div>
+
+            <div class="tools-card">
+                <h3>To-do</h3>
+                <div class="todo-add-row">
+                    <input type="text" id="todoInput" placeholder="Add item..." maxlength="200">
+                    <button type="button" id="todoAddBtn">+</button>
+                </div>
+                <ul id="todoList" class="todo-list"></ul>
             </div>
 
             <div class="chat-card">
