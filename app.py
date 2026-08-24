@@ -11,7 +11,6 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
 MAX_USERS = 10
 
-# ========== MongoDB Setup ==========
 MONGO_URI = os.environ.get('MONGO_URI')
 db = None
 messages_col = None
@@ -46,25 +45,37 @@ def get_or_create_room(room_id):
             'queue': [],
             'messages': [],
             'moods': {},
+            'notes': '',
+            'todos': [],
+            'last_seen': {},
             'created_at': datetime.utcnow().isoformat()
         }
-    return rooms[room_id]
+    room = rooms[room_id]
+    room.setdefault('notes', '')
+    room.setdefault('todos', [])
+    room.setdefault('last_seen', {})
+    room.setdefault('moods', {})
+    return room
 
 
 def save_message_to_db(room_id, msg):
-    if messages_col is not None:
-        try:
-            messages_col.insert_one({
-                'room_id': room_id,
-                'id': msg['id'],
-                'name': msg['name'],
-                'avatar': msg.get('avatar', '👤'),
-                'message': msg['message'],
-                'time': msg['time'],
-                'created_at': datetime.utcnow()
-            })
-        except Exception as e:
-            print("Error saving message:", e)
+    if messages_col is None:
+        return
+    if msg.get('type', 'text') != 'text':
+        return
+    try:
+        messages_col.insert_one({
+            'room_id': room_id,
+            'id': msg['id'],
+            'name': msg['name'],
+            'avatar': msg.get('avatar', '👤'),
+            'message': msg['message'],
+            'type': 'text',
+            'time': msg['time'],
+            'created_at': datetime.utcnow()
+        })
+    except Exception as e:
+        print("Error saving message:", e)
 
 
 def load_messages_from_db(room_id, limit=80):
@@ -79,6 +90,8 @@ def load_messages_from_db(room_id, limit=80):
             'name': m.get('name', 'Anonymous'),
             'avatar': m.get('avatar', '👤'),
             'message': m.get('message', ''),
+            'type': m.get('type', 'text'),
+            'media': None,
             'time': m.get('time', '')
         } for m in messages]
     except Exception as e:
@@ -113,7 +126,9 @@ def handle_disconnect():
                 'sid': request.sid,
                 'name': username,
                 'users': list(room['users'].values()),
-                'max_users': MAX_USERS
+                'max_users': MAX_USERS,
+                'last_seen': room.get('last_seen', {}),
+                'moods': room.get('moods', {})
             }, room=room_id)
             print(f"{username} left room {room_id}")
             break
@@ -139,6 +154,7 @@ def handle_join(data):
         'avatar': avatar,
         'joined_at': datetime.utcnow().isoformat()
     }
+    room['last_seen'][username] = datetime.utcnow().isoformat()
 
     db_messages = load_messages_from_db(room_id)
     if not db_messages:
@@ -150,13 +166,18 @@ def handle_join(data):
         'queue': room['queue'],
         'messages': db_messages,
         'moods': room['moods'],
+        'notes': room.get('notes', ''),
+        'todos': room.get('todos', []),
+        'last_seen': room.get('last_seen', {}),
         'max_users': MAX_USERS
     })
 
     emit('user_joined', {
         'user': room['users'][request.sid],
         'users': list(room['users'].values()),
-        'max_users': MAX_USERS
+        'max_users': MAX_USERS,
+        'last_seen': room.get('last_seen', {}),
+        'moods': room.get('moods', {})
     }, room=room_id, include_self=False)
 
     print(f"{username} joined room {room_id} ({len(room['users'])}/{MAX_USERS})")
@@ -199,18 +220,34 @@ def handle_player_action(data):
 @socketio.on('chat_message')
 def handle_chat(data):
     room_id = data.get('room_id')
-    message = data.get('message', '').strip()
-    if not message:
-        return
+    message = (data.get('message') or '').strip()
+    msg_type = data.get('type', 'text')
+    media = data.get('media')
 
     room = get_or_create_room(room_id)
     user = room['users'].get(request.sid, {'name': 'Anonymous', 'avatar': '👤'})
+
+    if msg_type == 'text':
+        if not message:
+            return
+        body = message[:300]
+        media_out = None
+    elif msg_type in ('image', 'voice'):
+        if not media or not isinstance(media, str) or len(media) > 900000:
+            emit('error_msg', {'text': 'File too large or invalid'})
+            return
+        body = message[:100] if message else ('📷 Photo' if msg_type == 'image' else '🎤 Voice')
+        media_out = media
+    else:
+        return
 
     msg = {
         'id': str(uuid.uuid4()),
         'name': user['name'],
         'avatar': user['avatar'],
-        'message': message[:300],
+        'message': body,
+        'type': msg_type,
+        'media': media_out,
         'time': datetime.utcnow().strftime('%H:%M')
     }
 
@@ -228,7 +265,6 @@ def handle_reaction(data):
     reaction = data.get('reaction')
     room = get_or_create_room(room_id)
     user = room['users'].get(request.sid, {'name': 'Anonymous'})
-
     emit('reaction', {
         'from': user['name'],
         'reaction': reaction,
@@ -244,10 +280,70 @@ def handle_mood(data):
     user = room['users'].get(request.sid)
     if user:
         room['moods'][user['name']] = mood
+        room['last_seen'][user['name']] = datetime.utcnow().isoformat()
         emit('mood_update', {
             'name': user['name'],
             'mood': mood,
-            'moods': room['moods']
+            'moods': room['moods'],
+            'last_seen': room['last_seen']
+        }, room=room_id)
+
+
+@socketio.on('update_notes')
+def handle_notes(data):
+    room_id = data.get('room_id')
+    text = (data.get('text') or '')[:5000]
+    room = get_or_create_room(room_id)
+    room['notes'] = text
+    emit('notes_sync', {'text': text, 'from_sid': request.sid}, room=room_id)
+
+
+@socketio.on('todo_add')
+def handle_todo_add(data):
+    room_id = data.get('room_id')
+    text = (data.get('text') or '').strip()[:200]
+    if not text:
+        return
+    room = get_or_create_room(room_id)
+    item = {'id': str(uuid.uuid4()), 'text': text, 'done': False}
+    room['todos'].append(item)
+    if len(room['todos']) > 50:
+        room['todos'] = room['todos'][-50:]
+    emit('todos_sync', {'todos': room['todos']}, room=room_id)
+
+
+@socketio.on('todo_toggle')
+def handle_todo_toggle(data):
+    room_id = data.get('room_id')
+    todo_id = data.get('id')
+    room = get_or_create_room(room_id)
+    for t in room['todos']:
+        if t['id'] == todo_id:
+            t['done'] = not t['done']
+            break
+    emit('todos_sync', {'todos': room['todos']}, room=room_id)
+
+
+@socketio.on('todo_delete')
+def handle_todo_delete(data):
+    room_id = data.get('room_id')
+    todo_id = data.get('id')
+    room = get_or_create_room(room_id)
+    room['todos'] = [t for t in room['todos'] if t['id'] != todo_id]
+    emit('todos_sync', {'todos': room['todos']}, room=room_id)
+
+
+@socketio.on('heartbeat')
+def handle_heartbeat(data):
+    room_id = data.get('room_id')
+    room = get_or_create_room(room_id)
+    user = room['users'].get(request.sid)
+    if user:
+        room['last_seen'][user['name']] = datetime.utcnow().isoformat()
+        emit('last_seen_sync', {
+            'last_seen': room['last_seen'],
+            'users': list(room['users'].values()),
+            'moods': room.get('moods', {})
         }, room=room_id)
 
 
