@@ -35,6 +35,10 @@ const sharedNotes = document.getElementById('sharedNotes');
 const todoInput = document.getElementById('todoInput');
 const todoAddBtn = document.getElementById('todoAddBtn');
 const todoList = document.getElementById('todoList');
+const photoInput = document.getElementById('photoInput');
+const photoBtn = document.getElementById('photoBtn');
+const voiceBtn = document.getElementById('voiceBtn');
+const voiceStatus = document.getElementById('voiceStatus');
 
 function onYouTubeIframeAPIReady() {
     player = new YT.Player('player', {
@@ -47,16 +51,20 @@ function onYouTubeIframeAPIReady() {
         }
     });
 }
-const tag = document.createElement('script');
-tag.src = "https://www.youtube.com/iframe_api";
-document.head.appendChild(tag);
+const ytTag = document.createElement('script');
+ytTag.src = 'https://www.youtube.com/iframe_api';
+document.head.appendChild(ytTag);
 
 function onPlayerStateChange(event) {
     if (isSyncing) return;
     if (event.data === YT.PlayerState.PLAYING) {
-        isPlaying = true; btnPlayPause.textContent = '⏸'; emitPlayerAction('play');
+        isPlaying = true;
+        btnPlayPause.textContent = '⏸';
+        emitPlayerAction('play');
     } else if (event.data === YT.PlayerState.PAUSED) {
-        isPlaying = false; btnPlayPause.textContent = '▶️'; emitPlayerAction('pause');
+        isPlaying = false;
+        btnPlayPause.textContent = '▶️';
+        emitPlayerAction('pause');
     }
 }
 
@@ -64,8 +72,12 @@ function emitPlayerAction(action, extra = {}) {
     if (!isPlayerReady || isSyncing) return;
     const currentTime = player.getCurrentTime ? player.getCurrentTime() : 0;
     socket.emit('player_action', {
-        room_id: ROOM_ID, action, current_time: currentTime,
-        video_id: currentVideoId, title: npTitle.textContent, ...extra
+        room_id: ROOM_ID,
+        action,
+        current_time: currentTime,
+        video_id: currentVideoId,
+        title: npTitle.textContent,
+        ...extra
     });
 }
 
@@ -80,6 +92,7 @@ socket.on('room_full', (data) => {
     alert('Room full (' + data.count + '/' + data.max + '). Try another code.');
     window.location.href = '/';
 });
+socket.on('error_msg', (data) => alert((data && data.text) || 'Error'));
 
 socket.on('room_state', (data) => {
     maxUsers = data.max_users || 10;
@@ -100,17 +113,21 @@ socket.on('room_state', (data) => {
                 isSyncing = true;
                 player.seekTo(data.player.current_time || 0, true);
                 if (data.player.is_playing) {
-                    player.playVideo(); btnPlayPause.textContent = '⏸'; isPlaying = true;
+                    player.playVideo();
+                    btnPlayPause.textContent = '⏸';
+                    isPlaying = true;
                 } else {
-                    player.pauseVideo(); btnPlayPause.textContent = '▶️'; isPlaying = false;
+                    player.pauseVideo();
+                    btnPlayPause.textContent = '▶️';
+                    isPlaying = false;
                 }
-                setTimeout(() => isSyncing = false, 800);
+                setTimeout(() => { isSyncing = false; }, 800);
             }
         }, 1200);
     }
     if (data.messages) {
         chatMessages.innerHTML = '';
-        data.messages.forEach(msg => appendMessage(msg));
+        data.messages.forEach((msg) => appendMessage(msg));
     }
 });
 
@@ -136,30 +153,44 @@ socket.on('player_sync', (data) => {
     if (data.action === 'load' && data.video_id) {
         loadVideo(data.video_id, data.title, false);
         setTimeout(() => {
-            if (player) { player.seekTo(0, true); player.playVideo(); btnPlayPause.textContent = '⏸'; isPlaying = true; }
+            if (player) {
+                player.seekTo(0, true);
+                player.playVideo();
+                btnPlayPause.textContent = '⏸';
+                isPlaying = true;
+            }
             isSyncing = false;
         }, 1000);
         return;
     }
-    if (!player || !isPlayerReady) { isSyncing = false; return; }
+    if (!player || !isPlayerReady) {
+        isSyncing = false;
+        return;
+    }
     if (data.action === 'play') {
-        player.seekTo(data.current_time || 0, true); player.playVideo();
-        btnPlayPause.textContent = '⏸'; isPlaying = true;
+        player.seekTo(data.current_time || 0, true);
+        player.playVideo();
+        btnPlayPause.textContent = '⏸';
+        isPlaying = true;
     } else if (data.action === 'pause') {
-        player.seekTo(data.current_time || 0, true); player.pauseVideo();
-        btnPlayPause.textContent = '▶️'; isPlaying = false;
+        player.seekTo(data.current_time || 0, true);
+        player.pauseVideo();
+        btnPlayPause.textContent = '▶️';
+        isPlaying = false;
     } else if (data.action === 'seek') {
         player.seekTo(data.current_time || 0, true);
     }
-    setTimeout(() => isSyncing = false, 600);
+    setTimeout(() => { isSyncing = false; }, 600);
 });
 
 socket.on('new_message', appendMessage);
-socket.on('reaction', (data) => showFloatingReaction(data.reaction, data.from));
+socket.on('reaction', (data) => showFloatingReaction(data.reaction));
 
 socket.on('notes_sync', (data) => {
     if (data.from_sid === socket.id) return;
-    if (sharedNotes && document.activeElement !== sharedNotes) sharedNotes.value = data.text || '';
+    if (sharedNotes && document.activeElement !== sharedNotes) {
+        sharedNotes.value = data.text || '';
+    }
 });
 socket.on('todos_sync', (data) => renderTodos(data.todos || []));
 socket.on('mood_update', (data) => {
@@ -189,7 +220,7 @@ function updateUsers(users, max = 10) {
     if (!users || !count) return;
     const moods = window._moods || {};
     const lastSeen = window._lastSeen || {};
-    users.forEach(u => {
+    users.forEach((u) => {
         const mood = moods[u.name] || '';
         const seen = formatLastSeen(lastSeen[u.name]);
         const div = document.createElement('div');
@@ -206,7 +237,7 @@ function updateUsers(users, max = 10) {
 function renderTodos(todos) {
     if (!todoList) return;
     todoList.innerHTML = '';
-    (todos || []).forEach(t => {
+    (todos || []).forEach((t) => {
         const li = document.createElement('li');
         li.className = 'todo-item' + (t.done ? ' done' : '');
         li.innerHTML =
@@ -225,10 +256,17 @@ function renderTodos(todos) {
 function appendMessage(msg) {
     const div = document.createElement('div');
     div.className = 'msg';
+    let body = '';
+    if (msg.type === 'image' && msg.media) {
+        body = '<img class="chat-img" src="' + msg.media + '" alt="photo">';
+    } else if (msg.type === 'voice' && msg.media) {
+        body = '<audio class="chat-audio" controls src="' + msg.media + '"></audio>';
+    } else {
+        body = '<div class="msg-body">' + escapeHtml(msg.message || '') + '</div>';
+    }
     div.innerHTML =
-        '<div class="msg-header"><span class="msg-name">' + escapeHtml(msg.name) +
-        '</span><span class="msg-time">' + msg.time + '</span></div>' +
-        '<div class="msg-body">' + escapeHtml(msg.message) + '</div>';
+        '<div class="msg-header"><span class="msg-name">' + escapeHtml(msg.name || '') +
+        '</span><span class="msg-time">' + (msg.time || '') + '</span></div>' + body;
     chatMessages.appendChild(div);
     chatMessages.scrollTop = chatMessages.scrollHeight;
 }
@@ -236,7 +274,8 @@ function appendMessage(msg) {
 function showSystemMessage(text) {
     const div = document.createElement('div');
     div.className = 'msg';
-    div.innerHTML = '<div class="msg-body" style="text-align:center;opacity:0.7;font-size:0.85rem;">' +
+    div.innerHTML =
+        '<div class="msg-body" style="text-align:center;opacity:0.7;font-size:0.85rem;">' +
         escapeHtml(text) + '</div>';
     chatMessages.appendChild(div);
     chatMessages.scrollTop = chatMessages.scrollHeight;
@@ -244,7 +283,7 @@ function showSystemMessage(text) {
 
 function escapeHtml(text) {
     const div = document.createElement('div');
-    div.textContent = text;
+    div.textContent = text == null ? '' : String(text);
     return div.innerHTML;
 }
 
@@ -261,8 +300,10 @@ function showFloatingReaction(type) {
 
 btnPlayPause.addEventListener('click', () => {
     if (!player || !isPlayerReady || !currentVideoId) return;
-    if (isPlaying) player.pauseVideo(); else player.playVideo();
+    if (isPlaying) player.pauseVideo();
+    else player.playVideo();
 });
+
 seekBar.addEventListener('input', () => {
     if (!player || !isPlayerReady) return;
     const duration = player.getDuration() || 1;
@@ -270,6 +311,7 @@ seekBar.addEventListener('input', () => {
     player.seekTo(time, true);
     emitPlayerAction('seek', { current_time: time });
 });
+
 setInterval(() => {
     if (!player || !isPlayerReady || !currentVideoId) return;
     try {
@@ -285,7 +327,8 @@ setInterval(() => {
 
 function formatTime(sec) {
     sec = Math.floor(sec);
-    const m = Math.floor(sec / 60), s = sec % 60;
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
     return m + ':' + (s < 10 ? '0' : '') + s;
 }
 
@@ -296,12 +339,18 @@ function loadVideo(videoId, title = 'Unknown', broadcast = true) {
     if (player && isPlayerReady) player.loadVideoById(videoId);
     else {
         const check = setInterval(() => {
-            if (isPlayerReady) { player.loadVideoById(videoId); clearInterval(check); }
+            if (isPlayerReady) {
+                player.loadVideoById(videoId);
+                clearInterval(check);
+            }
         }, 200);
     }
     if (broadcast) {
         socket.emit('player_action', {
-            room_id: ROOM_ID, action: 'load', video_id: videoId, title: title
+            room_id: ROOM_ID,
+            action: 'load',
+            video_id: videoId,
+            title: title
         });
     }
 }
@@ -319,7 +368,9 @@ function extractVideoId(url) {
 }
 
 searchBtn.addEventListener('click', handleSearch);
-searchInput.addEventListener('keypress', (e) => { if (e.key === 'Enter') handleSearch(); });
+searchInput.addEventListener('keypress', (e) => {
+    if (e.key === 'Enter') handleSearch();
+});
 
 function handleSearch() {
     const q = searchInput.value.trim();
@@ -327,7 +378,8 @@ function handleSearch() {
     const videoId = extractVideoId(q);
     if (videoId) {
         loadVideo(videoId, 'YouTube Video');
-        searchInput.value = ''; searchResults.innerHTML = '';
+        searchInput.value = '';
+        searchResults.innerHTML = '';
         return;
     }
     performSearch(q);
@@ -336,46 +388,60 @@ function handleSearch() {
 async function performSearch(query) {
     searchResults.innerHTML = '<div style="padding:12px;color:var(--text-muted);">Searching...</div>';
     try {
-        const instances = ['https://invidious.fdn.fr', 'https://vid.puffyan.us', 'https://invidious.projectsegfau.lt'];
+        const instances = [
+            'https://invidious.fdn.fr',
+            'https://vid.puffyan.us',
+            'https://invidious.projectsegfau.lt'
+        ];
         let results = null;
         for (const base of instances) {
             try {
                 const res = await fetch(base + '/api/v1/search?q=' + encodeURIComponent(query) + '&type=video');
-                if (res.ok) { results = await res.json(); break; }
+                if (res.ok) {
+                    results = await res.json();
+                    break;
+                }
             } catch (e) {}
         }
         if (!results || !results.length) {
-            searchResults.innerHTML = '<div style="padding:14px;color:var(--text-muted);font-size:0.9rem;">Paste a YouTube link instead.</div>';
+            searchResults.innerHTML =
+                '<div style="padding:14px;color:var(--text-muted);font-size:0.9rem;">Paste a YouTube link instead.</div>';
             return;
         }
         searchResults.innerHTML = '';
-        results.slice(0, 8).forEach(item => {
+        results.slice(0, 8).forEach((item) => {
             const div = document.createElement('div');
             div.className = 'search-item';
-            const thumb = (item.videoThumbnails && (item.videoThumbnails[3] || item.videoThumbnails[0]) || {}).url || '';
-            div.innerHTML = '<img src="' + thumb + '" alt="" onerror="this.style.display=\'none\'"><div class="info"><div class="title">' +
+            const thumb =
+                (item.videoThumbnails && (item.videoThumbnails[3] || item.videoThumbnails[0]) || {}).url || '';
+            div.innerHTML =
+                '<img src="' + thumb + '" alt="" onerror="this.style.display=\'none\'"><div class="info"><div class="title">' +
                 escapeHtml(item.title) + '</div><div class="channel">' + escapeHtml(item.author || '') + '</div></div>';
             div.addEventListener('click', () => {
                 loadVideo(item.videoId, item.title);
-                searchResults.innerHTML = ''; searchInput.value = '';
+                searchResults.innerHTML = '';
+                searchInput.value = '';
             });
             searchResults.appendChild(div);
         });
     } catch (err) {
-        searchResults.innerHTML = '<div style="padding:14px;color:var(--text-muted);font-size:0.9rem;">Paste a YouTube link.</div>';
+        searchResults.innerHTML =
+            '<div style="padding:14px;color:var(--text-muted);font-size:0.9rem;">Paste a YouTube link.</div>';
     }
 }
 
 function sendMessage() {
     const text = chatInput.value.trim();
     if (!text) return;
-    socket.emit('chat_message', { room_id: ROOM_ID, message: text });
+    socket.emit('chat_message', { room_id: ROOM_ID, type: 'text', message: text });
     chatInput.value = '';
 }
 sendBtn.addEventListener('click', sendMessage);
-chatInput.addEventListener('keypress', (e) => { if (e.key === 'Enter') sendMessage(); });
+chatInput.addEventListener('keypress', (e) => {
+    if (e.key === 'Enter') sendMessage();
+});
 
-document.querySelectorAll('.react-btn').forEach(btn => {
+document.querySelectorAll('.react-btn').forEach((btn) => {
     btn.addEventListener('click', () => {
         const reaction = btn.dataset.reaction;
         socket.emit('send_reaction', { room_id: ROOM_ID, reaction });
@@ -383,7 +449,7 @@ document.querySelectorAll('.react-btn').forEach(btn => {
     });
 });
 
-document.querySelectorAll('.mood-btn').forEach(btn => {
+document.querySelectorAll('.mood-btn').forEach((btn) => {
     btn.addEventListener('click', () => {
         socket.emit('set_mood', { room_id: ROOM_ID, mood: btn.dataset.mood });
     });
@@ -407,7 +473,109 @@ if (todoAddBtn && todoInput) {
         todoInput.value = '';
     };
     todoAddBtn.addEventListener('click', addTodo);
-    todoInput.addEventListener('keypress', (e) => { if (e.key === 'Enter') addTodo(); });
+    todoInput.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') addTodo();
+    });
+}
+
+function compressImage(file, maxW, quality) {
+    return new Promise((resolve, reject) => {
+        const img = new Image();
+        const url = URL.createObjectURL(file);
+        img.onload = () => {
+            const scale = Math.min(1, maxW / img.width);
+            const canvas = document.createElement('canvas');
+            canvas.width = Math.round(img.width * scale);
+            canvas.height = Math.round(img.height * scale);
+            canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+            URL.revokeObjectURL(url);
+            resolve(canvas.toDataURL('image/jpeg', quality));
+        };
+        img.onerror = reject;
+        img.src = url;
+    });
+}
+
+if (photoBtn && photoInput) {
+    photoBtn.addEventListener('click', () => photoInput.click());
+    photoInput.addEventListener('change', async () => {
+        const file = photoInput.files && photoInput.files[0];
+        photoInput.value = '';
+        if (!file) return;
+        try {
+            const dataUrl = await compressImage(file, 800, 0.7);
+            socket.emit('chat_message', {
+                room_id: ROOM_ID,
+                type: 'image',
+                message: '',
+                media: dataUrl
+            });
+        } catch (e) {
+            alert('Could not send photo');
+        }
+    });
+} else {
+    console.warn('photoBtn/photoInput missing in HTML');
+}
+
+let mediaRecorder = null;
+let audioChunks = [];
+let recording = false;
+
+if (voiceBtn) {
+    voiceBtn.addEventListener('click', async () => {
+        if (recording) {
+            if (mediaRecorder && mediaRecorder.state === 'recording') mediaRecorder.stop();
+            recording = false;
+            voiceBtn.textContent = '🎤';
+            if (voiceStatus) voiceStatus.textContent = 'Sending...';
+            return;
+        }
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            audioChunks = [];
+            mediaRecorder = new MediaRecorder(stream);
+            mediaRecorder.ondataavailable = (e) => {
+                if (e.data && e.data.size > 0) audioChunks.push(e.data);
+            };
+            mediaRecorder.onstop = () => {
+                stream.getTracks().forEach((t) => t.stop());
+                const blob = new Blob(audioChunks, { type: 'audio/webm' });
+                if (blob.size > 700000) {
+                    alert('Voice too large');
+                    if (voiceStatus) voiceStatus.textContent = '';
+                    return;
+                }
+                const reader = new FileReader();
+                reader.onloadend = () => {
+                    socket.emit('chat_message', {
+                        room_id: ROOM_ID,
+                        type: 'voice',
+                        message: '',
+                        media: reader.result
+                    });
+                    if (voiceStatus) voiceStatus.textContent = '';
+                };
+                reader.readAsDataURL(blob);
+            };
+            mediaRecorder.start();
+            recording = true;
+            voiceBtn.textContent = '⏹';
+            if (voiceStatus) voiceStatus.textContent = 'Recording... tap again to stop';
+            setTimeout(() => {
+                if (recording && mediaRecorder && mediaRecorder.state === 'recording') {
+                    mediaRecorder.stop();
+                    recording = false;
+                    voiceBtn.textContent = '🎤';
+                }
+            }, 30000);
+        } catch (e) {
+            alert('Mic permission needed (use HTTPS)');
+            console.error(e);
+        }
+    });
+} else {
+    console.warn('voiceBtn missing in HTML');
 }
 
 setInterval(() => {
@@ -417,14 +585,18 @@ setInterval(() => {
 function copyRoomCode() {
     navigator.clipboard.writeText(ROOM_ID).then(() => {
         showSystemMessage('Room code copied: ' + ROOM_ID);
-    }).catch(() => prompt('Copy room code:', ROOM_ID));
+    }).catch(() => {
+        prompt('Copy room code:', ROOM_ID);
+    });
 }
+
 function leaveRoom() {
     if (confirm('Leave this room?')) {
         socket.disconnect();
         window.location.href = '/';
     }
 }
+
 window.copyRoomCode = copyRoomCode;
 window.leaveRoom = leaveRoom;
 window.onYouTubeIframeAPIReady = onYouTubeIframeAPIReady;
