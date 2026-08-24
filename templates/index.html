@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>OnlyUs 💗 bubudubu</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@400;500;600;700&family=Playfair+Display:wght@500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body class="landing">
+    <div class="bg-orbs">
+        <div class="orb orb-1"></div>
+        <div class="orb orb-2"></div>
+        <div class="orb orb-3"></div>
+    </div>
+
+    <div class="landing-container">
+        <div class="logo-area">
+            <div class="heart-pulse">💗</div>
+            <h1 class="brand">OnlyUs</h1>
+            <p class="tagline">bubudubu • just the two of us</p>
+        </div>
+
+        <div class="join-card">
+            <h2>Enter Our Space</h2>
+            <p class="subtitle">Your private world, always in sync</p>
+
+            <div class="form-group">
+                <label>Your Name</label>
+                <input type="text" id="username" placeholder="e.g. Bubbu" maxlength="20" autocomplete="off">
+            </div>
+
+            <div class="form-group">
+                <label>Room Code</label>
+                <input type="text" id="roomcode" value="bubudubu" placeholder="bubudubu" maxlength="20" autocomplete="off">
+            </div>
+
+            <button class="btn-primary" id="enterBtn">
+                <span>Enter Together</span>
+                <span class="btn-icon">→</span>
+            </button>
+
+            <p class="hint">Same room code = same private space ✨</p>
+        </div>
+
+        <div class="footer-note">
+            Made with love for long distance hearts
+        </div>
+    </div>
+
+    <script>
+        const enterBtn = document.getElementById('enterBtn');
+        const usernameInput = document.getElementById('username');
+        const roomInput = document.getElementById('roomcode');
+
+        function enterRoom() {
+            const name = usernameInput.value.trim() || 'Anonymous';
+            const room = roomInput.value.trim().toLowerCase() || 'bubudubu';
+            window.location.href = `/room/${encodeURIComponent(room)}?name=${encodeURIComponent(name)}`;
+        }
+
+        enterBtn.addEventListener('click', enterRoom);
+        usernameInput.addEventListener('keypress', (e) => e.key === 'Enter' && enterRoom());
+        roomInput.addEventListener('keypress', (e) => e.key === 'Enter' && enterRoom());
+
+        // Soft focus
+        usernameInput.focus();
+    </script>
+</body>
+</html>

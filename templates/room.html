@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>OnlyUs • {{ room_id }}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@400;500;600;700&family=Playfair+Display:wght@500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js"></script>
+</head>
+<body class="room-page">
+    <div class="bg-orbs">
+        <div class="orb orb-1"></div>
+        <div class="orb orb-2"></div>
+        <div class="orb orb-3"></div>
+    </div>
+
+    <!-- Top Bar -->
+    <header class="topbar">
+        <div class="brand-mini">
+            <span class="heart">💗</span>
+            <span>OnlyUs</span>
+        </div>
+        <div class="online-status" id="onlineStatus">
+            <span class="dot"></span>
+            <span id="userCount">Connecting...</span>
+        </div>
+        <div class="user-badge" id="myName">{{ username }}</div>
+    </header>
+
+    <main class="room-layout">
+        <!-- Left: Player + Search -->
+        <section class="player-section">
+            <div class="player-card">
+                <div class="now-playing" id="nowPlaying">
+                    <div class="np-label">Now Playing</div>
+                    <div class="np-title" id="npTitle">Nothing yet... search a song 🎵</div>
+                </div>
+
+                <div class="video-wrapper" id="videoWrapper">
+                    <div id="player"></div>
+                    <div class="player-placeholder" id="playerPlaceholder">
+                        <div class="placeholder-icon">🎶</div>
+                        <p>Search or paste a YouTube link</p>
+                    </div>
+                </div>
+
+                <div class="player-controls">
+                    <button class="ctrl-btn" id="btnPlayPause" title="Play/Pause">▶️</button>
+                    <div class="seek-area">
+                        <input type="range" id="seekBar" min="0" max="100" value="0" step="0.1">
+                        <div class="time-row">
+                            <span id="currentTime">0:00</span>
+                            <span id="duration">0:00</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="search-box">
+                    <input type="text" id="searchInput" placeholder="Search song or paste YouTube URL..." autocomplete="off">
+                    <button id="searchBtn">Search</button>
+                </div>
+
+                <div class="search-results" id="searchResults"></div>
+            </div>
+
+            <!-- Reactions -->
+            <div class="reactions-bar">
+                <button class="react-btn" data-reaction="hug" title="Virtual Hug">🤗</button>
+                <button class="react-btn" data-reaction="kiss" title="Send Kiss">💋</button>
+                <button class="react-btn" data-reaction="missyou" title="I Miss You">🥺</button>
+                <button class="react-btn" data-reaction="heart" title="Heart">💖</button>
+            </div>
+        </section>
+
+        <!-- Right: Chat + Presence -->
+        <section class="side-section">
+            <div class="presence-card">
+                <h3>Together Now</h3>
+                <div class="users-list" id="usersList"></div>
+            </div>
+
+            <div class="chat-card">
+                <div class="chat-messages" id="chatMessages"></div>
+                <div class="chat-input-row">
+                    <input type="text" id="chatInput" placeholder="Say something sweet..." maxlength="300" autocomplete="off">
+                    <button id="sendBtn">➤</button>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <!-- Floating reaction animation container -->
+    <div id="reactionOverlay"></div>
+
+    <script>
+        // Pass server data
+        const ROOM_ID = "{{ room_id }}";
+        const USERNAME = "{{ username }}";
+    </script>
+    <script src="{{ url_for('static', filename='js/room.js') }}"></script>
+</body>
+</html>
