@@ -57,6 +57,7 @@ def get_or_create_room(room_id):
     room.setdefault('last_seen', {})
     room.setdefault('moods', {})
     room.setdefault('voice', set())
+    room.setdefault('queue', [])
     return room
 
 
@@ -169,7 +170,7 @@ def handle_join(data):
     emit('room_state', {
         'users': list(room['users'].values()),
         'player': room['player'],
-        'queue': room['queue'],
+        'queue': room.get('queue', []),
         'messages': db_messages,
         'moods': room['moods'],
         'notes': room.get('notes', ''),
@@ -219,6 +220,62 @@ def handle_player_action(data):
         'title': room['player']['title'],
         'is_playing': room['player']['is_playing'],
         'current_time': room['player']['current_time'],
+        'from_sid': request.sid
+    }, room=room_id)
+
+
+# ========== QUEUE ==========
+@socketio.on('queue_add')
+def handle_queue_add(data):
+    room_id = data.get('room_id')
+    video_id = data.get('video_id')
+    title = (data.get('title') or 'Unknown')[:120]
+    if not room_id or not video_id:
+        return
+    room = get_or_create_room(room_id)
+    user = room['users'].get(request.sid, {})
+    item = {
+        'id': str(uuid.uuid4()),
+        'video_id': video_id,
+        'title': title,
+        'by': user.get('name', 'Someone')
+    }
+    room['queue'].append(item)
+    if len(room['queue']) > 30:
+        room['queue'] = room['queue'][-30:]
+    emit('queue_sync', {'queue': room['queue']}, room=room_id)
+    print(f"Queue add in {room_id}: {title} ({len(room['queue'])})")
+
+
+@socketio.on('queue_remove')
+def handle_queue_remove(data):
+    room_id = data.get('room_id')
+    item_id = data.get('id')
+    room = get_or_create_room(room_id)
+    room['queue'] = [q for q in room['queue'] if q.get('id') != item_id]
+    emit('queue_sync', {'queue': room['queue']}, room=room_id)
+
+
+@socketio.on('queue_next')
+def handle_queue_next(data):
+    room_id = data.get('room_id')
+    room = get_or_create_room(room_id)
+    if not room['queue']:
+        emit('queue_empty', {})
+        return
+    item = room['queue'].pop(0)
+    room['player']['video_id'] = item['video_id']
+    room['player']['title'] = item['title']
+    room['player']['is_playing'] = True
+    room['player']['current_time'] = 0
+    room['player']['last_update'] = datetime.utcnow().isoformat()
+    emit('queue_sync', {'queue': room['queue']}, room=room_id)
+    emit('player_sync', {
+        'action': 'load',
+        'video_id': item['video_id'],
+        'title': item['title'],
+        'is_playing': True,
+        'current_time': 0,
         'from_sid': request.sid
     }, room=room_id)
 
@@ -353,22 +410,15 @@ def handle_heartbeat(data):
         }, room=room_id)
 
 
-# ========== LIVE VOICE (WebRTC signaling) ==========
-
 @socketio.on('voice_join')
 def handle_voice_join(data):
     room_id = data.get('room_id')
     room = get_or_create_room(room_id)
     if request.sid not in room['users']:
         return
-
     peers = [s for s in room['voice'] if s != request.sid]
     room['voice'].add(request.sid)
-
-    # existing peers → joiner (joiner will send offers)
     emit('voice_peers', {'peers': peers})
-
-    # notify others someone joined voice
     emit('voice_user_joined', {
         'sid': request.sid,
         'name': room['users'][request.sid]['name']
