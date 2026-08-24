@@ -175,15 +175,17 @@ socket.on('user_left', (data) => {
     showSystemMessage(data.name + ' left');
 });
 
+/* FIXED: load always applies (including self) so Next works */
 socket.on('player_sync', (data) => {
-    if (data.from_sid === socket.id) return;
-    isSyncing = true;
     if (data.action === 'load' && data.video_id) {
+        isSyncing = true;
         loadVideo(data.video_id, data.title, false);
         setTimeout(() => {
             if (player) {
-                player.seekTo(0, true);
-                player.playVideo();
+                try {
+                    player.seekTo(0, true);
+                    player.playVideo();
+                } catch (e) {}
                 btnPlayPause.textContent = '⏸';
                 isPlaying = true;
             }
@@ -191,6 +193,10 @@ socket.on('player_sync', (data) => {
         }, 1000);
         return;
     }
+
+    if (data.from_sid === socket.id) return;
+
+    isSyncing = true;
     if (!player || !isPlayerReady) {
         isSyncing = false;
         return;
