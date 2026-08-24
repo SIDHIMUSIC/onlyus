@@ -9,7 +9,7 @@ const socket = io({
 
 let player = null;
 let isPlayerReady = false;
-let isSyncing = false;          // prevent feedback loops
+let isSyncing = false;
 let currentVideoId = null;
 let isPlaying = false;
 
@@ -53,7 +53,6 @@ function onYouTubeIframeAPIReady() {
     });
 }
 
-// Load YouTube API
 const tag = document.createElement('script');
 tag.src = "https://www.youtube.com/iframe_api";
 document.head.appendChild(tag);
@@ -134,12 +133,12 @@ socket.on('room_state', (data) => {
 
 socket.on('user_joined', (data) => {
     updateUsers(data.users);
-    showSystemMessage(`${data.user.name} joined 💕`);
+    showSystemMessage(data.user.name + ' joined 💕');
 });
 
 socket.on('user_left', (data) => {
     updateUsers(data.users);
-    showSystemMessage(`${data.name} left`);
+    showSystemMessage(data.name + ' left');
 });
 
 socket.on('player_sync', (data) => {
@@ -198,17 +197,11 @@ function updateUsers(users) {
         userCount.textContent = 'Waiting...';
         return;
     }
-    userCount.textContent = `${users.length} online`;
+    userCount.textContent = users.length + ' online';
     users.forEach(u => {
         const div = document.createElement('div');
         div.className = 'user-item';
-        div.innerHTML = `
-            <span class="user-avatar">${u.avatar || '💗'}</span>
-            <div>
-                <div class="user-name">${escapeHtml(u.name)}</div>
-                <div class="user-status">● online</div>
-            </div>
-        `;
+        div.innerHTML = '<span class="user-avatar">' + (u.avatar || '💗') + '</span><div><div class="user-name">' + escapeHtml(u.name) + '</div><div class="user-status">● online</div></div>';
         usersList.appendChild(div);
     });
 }
@@ -216,13 +209,7 @@ function updateUsers(users) {
 function appendMessage(msg) {
     const div = document.createElement('div');
     div.className = 'msg';
-    div.innerHTML = `
-        <div class="msg-header">
-            <span class="msg-name">${escapeHtml(msg.name)}</span>
-            <span class="msg-time">${msg.time}</span>
-        </div>
-        <div class="msg-body">${escapeHtml(msg.message)}</div>
-    `;
+    div.innerHTML = '<div class="msg-header"><span class="msg-name">' + escapeHtml(msg.name) + '</span><span class="msg-time">' + msg.time + '</span></div><div class="msg-body">' + escapeHtml(msg.message) + '</div>';
     chatMessages.appendChild(div);
     chatMessages.scrollTop = chatMessages.scrollHeight;
 }
@@ -230,7 +217,7 @@ function appendMessage(msg) {
 function showSystemMessage(text) {
     const div = document.createElement('div');
     div.className = 'msg';
-    div.innerHTML = `<div class="msg-body" style="text-align:center;opacity:0.7;font-size:0.85rem;">${escapeHtml(text)}</div>`;
+    div.innerHTML = '<div class="msg-body" style="text-align:center;opacity:0.7;font-size:0.85rem;">' + escapeHtml(text) + '</div>';
     chatMessages.appendChild(div);
     chatMessages.scrollTop = chatMessages.scrollHeight;
 }
@@ -276,7 +263,6 @@ seekBar.addEventListener('input', () => {
     emitPlayerAction('seek', { current_time: time });
 });
 
-// Update seek bar
 setInterval(() => {
     if (!player || !isPlayerReady || !currentVideoId) return;
     try {
@@ -294,7 +280,7 @@ function formatTime(sec) {
     sec = Math.floor(sec);
     const m = Math.floor(sec / 60);
     const s = sec % 60;
-    return `\( {m}: \){s.toString().padStart(2, '0')}`;
+    return m + ':' + (s < 10 ? '0' : '') + s;
 }
 
 // ========== Load Video ==========
@@ -370,7 +356,7 @@ async function performSearch(query) {
         let results = null;
         for (const base of instances) {
             try {
-                const res = await fetch(`\( {base}/api/v1/search?q= \){encodeURIComponent(query)}&type=video`);
+                const res = await fetch(base + '/api/v1/search?q=' + encodeURIComponent(query) + '&type=video');
                 if (res.ok) {
                     results = await res.json();
                     break;
@@ -379,11 +365,7 @@ async function performSearch(query) {
         }
 
         if (!results || results.length === 0) {
-            searchResults.innerHTML = `
-                <div style="padding:14px;color:var(--text-muted);font-size:0.9rem;">
-                    Search temporarily unavailable.<br>
-                    <strong>Tip:</strong> Paste any YouTube link directly 🎵
-                </div>`;
+            searchResults.innerHTML = '<div style="padding:14px;color:var(--text-muted);font-size:0.9rem;">Search temporarily unavailable.<br><strong>Tip:</strong> Paste any YouTube link directly 🎵</div>';
             return;
         }
 
@@ -391,14 +373,8 @@ async function performSearch(query) {
         results.slice(0, 8).forEach(item => {
             const div = document.createElement('div');
             div.className = 'search-item';
-            const thumb = item.videoThumbnails?.[3]?.url || item.videoThumbnails?.[0]?.url || '';
-            div.innerHTML = `
-                <img src="${thumb}" alt="" onerror="this.style.display='none'">
-                <div class="info">
-                    <div class="title">${escapeHtml(item.title)}</div>
-                    <div class="channel">${escapeHtml(item.author || '')}</div>
-                </div>
-            `;
+            const thumb = (item.videoThumbnails && item.videoThumbnails[3] && item.videoThumbnails[3].url) || (item.videoThumbnails && item.videoThumbnails[0] && item.videoThumbnails[0].url) || '';
+            div.innerHTML = '<img src="' + thumb + '" alt="" onerror="this.style.display=\'none\'"><div class="info"><div class="title">' + escapeHtml(item.title) + '</div><div class="channel">' + escapeHtml(item.author || '') + '</div></div>';
             div.addEventListener('click', () => {
                 loadVideo(item.videoId, item.title);
                 searchResults.innerHTML = '';
@@ -407,11 +383,7 @@ async function performSearch(query) {
             searchResults.appendChild(div);
         });
     } catch (err) {
-        searchResults.innerHTML = `
-            <div style="padding:14px;color:var(--text-muted);font-size:0.9rem;">
-                Could not search right now.<br>
-                Just paste a YouTube link instead ✨
-            </div>`;
+        searchResults.innerHTML = '<div style="padding:14px;color:var(--text-muted);font-size:0.9rem;">Could not search right now.<br>Just paste a YouTube link instead ✨</div>';
     }
 }
 
@@ -443,5 +415,4 @@ document.querySelectorAll('.react-btn').forEach(btn => {
     });
 });
 
-// Make onYouTubeIframeAPIReady global
 window.onYouTubeIframeAPIReady = onYouTubeIframeAPIReady;
