@@ -1,418 +1,331 @@
-// OnlyUs - Room Logic
-const socket = io({
-    transports: ['polling', 'websocket'],
-    upgrade: true,
-    reconnection: true,
-    reconnectionAttempts: 15,
-    timeout: 20000
-});
+from flask import Flask, render_template, request
+from flask_socketio import SocketIO, emit, join_room, leave_room
+import os
+import uuid
+from datetime import datetime
+from pymongo import MongoClient
 
-let player = null;
-let isPlayerReady = false;
-let isSyncing = false;
-let currentVideoId = null;
-let isPlaying = false;
-let maxUsers = 10;
+app = Flask(__name__)
+app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'onlyus-bubudubu-secret-key-2026')
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
-const searchInput = document.getElementById('searchInput');
-const searchBtn = document.getElementById('searchBtn');
-const searchResults = document.getElementById('searchResults');
-const npTitle = document.getElementById('npTitle');
-const playerPlaceholder = document.getElementById('playerPlaceholder');
-const btnPlayPause = document.getElementById('btnPlayPause');
-const seekBar = document.getElementById('seekBar');
-const currentTimeEl = document.getElementById('currentTime');
-const durationEl = document.getElementById('duration');
-const chatMessages = document.getElementById('chatMessages');
-const chatInput = document.getElementById('chatInput');
-const sendBtn = document.getElementById('sendBtn');
-const usersList = document.getElementById('usersList');
-const userCount = document.getElementById('userCount');
-const reactionOverlay = document.getElementById('reactionOverlay');
+MAX_USERS = 10
 
-function onYouTubeIframeAPIReady() {
-    player = new YT.Player('player', {
-        height: '100%',
-        width: '100%',
-        playerVars: {
-            autoplay: 0,
-            controls: 0,
-            modestbranding: 1,
-            rel: 0,
-            fs: 1,
-            playsinline: 1
-        },
-        events: {
-            onReady: () => {
-                isPlayerReady = true;
+MONGO_URI = os.environ.get('MONGO_URI')
+db = None
+messages_col = None
+
+if MONGO_URI:
+    try:
+        client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
+        client.admin.command('ping')
+        db = client['onlyus']
+        messages_col = db['messages']
+        print("✅ MongoDB Connected Successfully")
+    except Exception as e:
+        print("❌ MongoDB Connection Failed:", e)
+        db = None
+else:
+    print("⚠️ MONGO_URI not found - using in-memory only")
+
+rooms = {}
+
+
+def get_or_create_room(room_id):
+    if room_id not in rooms:
+        rooms[room_id] = {
+            'users': {},
+            'player': {
+                'video_id': None,
+                'title': None,
+                'is_playing': False,
+                'current_time': 0,
+                'last_update': None
             },
-            onStateChange: onPlayerStateChange
+            'queue': [],
+            'messages': [],
+            'moods': {},
+            'notes': '',
+            'todos': [],
+            'last_seen': {},
+            'created_at': datetime.utcnow().isoformat()
         }
-    });
-}
+    room = rooms[room_id]
+    room.setdefault('notes', '')
+    room.setdefault('todos', [])
+    room.setdefault('last_seen', {})
+    room.setdefault('moods', {})
+    return room
 
-const tag = document.createElement('script');
-tag.src = "https://www.youtube.com/iframe_api";
-document.head.appendChild(tag);
 
-function onPlayerStateChange(event) {
-    if (isSyncing) return;
-    const state = event.data;
-    if (state === YT.PlayerState.PLAYING) {
-        isPlaying = true;
-        btnPlayPause.textContent = '⏸';
-        emitPlayerAction('play');
-    } else if (state === YT.PlayerState.PAUSED) {
-        isPlaying = false;
-        btnPlayPause.textContent = '▶️';
-        emitPlayerAction('pause');
+def save_message_to_db(room_id, msg):
+    if messages_col is not None:
+        try:
+            messages_col.insert_one({
+                'room_id': room_id,
+                'id': msg['id'],
+                'name': msg['name'],
+                'avatar': msg.get('avatar', '👤'),
+                'message': msg['message'],
+                'time': msg['time'],
+                'created_at': datetime.utcnow()
+            })
+        except Exception as e:
+            print("Error saving message:", e)
+
+
+def load_messages_from_db(room_id, limit=80):
+    if messages_col is None:
+        return []
+    try:
+        cursor = messages_col.find({'room_id': room_id}).sort('created_at', -1).limit(limit)
+        messages = list(cursor)
+        messages.reverse()
+        return [{
+            'id': m.get('id', ''),
+            'name': m.get('name', 'Anonymous'),
+            'avatar': m.get('avatar', '👤'),
+            'message': m.get('message', ''),
+            'time': m.get('time', '')
+        } for m in messages]
+    except Exception as e:
+        print("Error loading messages:", e)
+        return []
+
+
+@app.route('/')
+def index():
+    return render_template('index.html')
+
+
+@app.route('/room/<room_id>')
+def room(room_id):
+    username = request.args.get('name', 'Anonymous')
+    return render_template('room.html', room_id=room_id, username=username)
+
+
+@socketio.on('connect')
+def handle_connect():
+    print(f"Client connected: {request.sid}")
+
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    for room_id, room in list(rooms.items()):
+        if request.sid in room['users']:
+            username = room['users'][request.sid]['name']
+            del room['users'][request.sid]
+            leave_room(room_id)
+            emit('user_left', {
+                'sid': request.sid,
+                'name': username,
+                'users': list(room['users'].values()),
+                'max_users': MAX_USERS,
+                'last_seen': room.get('last_seen', {}),
+                'moods': room.get('moods', {})
+            }, room=room_id)
+            print(f"{username} left room {room_id}")
+            break
+
+
+@socketio.on('join_room')
+def handle_join(data):
+    room_id = data.get('room_id', 'onlyus')
+    username = data.get('username', 'Anonymous')
+    avatar = data.get('avatar', '👤')
+
+    room = get_or_create_room(room_id)
+
+    if request.sid not in room['users']:
+        if len(room['users']) >= MAX_USERS:
+            emit('room_full', {'max': MAX_USERS, 'count': len(room['users'])})
+            return
+
+    join_room(room_id)
+    room['users'][request.sid] = {
+        'sid': request.sid,
+        'name': username,
+        'avatar': avatar,
+        'joined_at': datetime.utcnow().isoformat()
     }
-}
+    room['last_seen'][username] = datetime.utcnow().isoformat()
 
-function emitPlayerAction(action, extra = {}) {
-    if (!isPlayerReady || isSyncing) return;
-    const currentTime = player.getCurrentTime ? player.getCurrentTime() : 0;
-    socket.emit('player_action', {
-        room_id: ROOM_ID,
-        action,
-        current_time: currentTime,
-        video_id: currentVideoId,
-        title: npTitle.textContent,
-        ...extra
-    });
-}
+    db_messages = load_messages_from_db(room_id)
+    if not db_messages:
+        db_messages = room['messages'][-50:]
 
-socket.on('connect', () => {
-    userCount.textContent = '…';
-    socket.emit('join_room', {
-        room_id: ROOM_ID,
-        username: USERNAME,
-        avatar: '👤'
-    });
-});
+    emit('room_state', {
+        'users': list(room['users'].values()),
+        'player': room['player'],
+        'queue': room['queue'],
+        'messages': db_messages,
+        'moods': room['moods'],
+        'notes': room.get('notes', ''),
+        'todos': room.get('todos', []),
+        'last_seen': room.get('last_seen', {}),
+        'max_users': MAX_USERS
+    })
 
-socket.on('connect_error', () => {
-    userCount.textContent = 'Reconnecting...';
-});
+    emit('user_joined', {
+        'user': room['users'][request.sid],
+        'users': list(room['users'].values()),
+        'max_users': MAX_USERS,
+        'last_seen': room.get('last_seen', {}),
+        'moods': room.get('moods', {})
+    }, room=room_id, include_self=False)
 
-socket.on('disconnect', () => {
-    userCount.textContent = 'Offline';
-});
+    print(f"{username} joined room {room_id} ({len(room['users'])}/{MAX_USERS})")
 
-socket.on('room_full', (data) => {
-    alert('Room full (' + data.count + '/' + data.max + '). Try another code.');
-    window.location.href = '/';
-});
 
-socket.on('room_state', (data) => {
-    maxUsers = data.max_users || 10;
-    updateUsers(data.users, maxUsers);
-    if (data.player && data.player.video_id) {
-        loadVideo(data.player.video_id, data.player.title, false);
-        setTimeout(() => {
-            if (player && player.seekTo) {
-                isSyncing = true;
-                player.seekTo(data.player.current_time || 0, true);
-                if (data.player.is_playing) {
-                    player.playVideo();
-                    btnPlayPause.textContent = '⏸';
-                    isPlaying = true;
-                } else {
-                    player.pauseVideo();
-                    btnPlayPause.textContent = '▶️';
-                    isPlaying = false;
-                }
-                setTimeout(() => isSyncing = false, 800);
-            }
-        }, 1200);
-    }
-    if (data.messages) {
-        chatMessages.innerHTML = '';
-        data.messages.forEach(msg => appendMessage(msg));
-    }
-});
+@socketio.on('player_action')
+def handle_player_action(data):
+    room_id = data.get('room_id')
+    action = data.get('action')
+    room = get_or_create_room(room_id)
 
-socket.on('user_joined', (data) => {
-    updateUsers(data.users, data.max_users || maxUsers);
-    showSystemMessage(data.user.name + ' joined');
-});
+    if action == 'load':
+        room['player']['video_id'] = data.get('video_id')
+        room['player']['title'] = data.get('title', 'Unknown')
+        room['player']['is_playing'] = True
+        room['player']['current_time'] = 0
+        room['player']['last_update'] = datetime.utcnow().isoformat()
+    elif action == 'play':
+        room['player']['is_playing'] = True
+        room['player']['current_time'] = data.get('current_time', room['player']['current_time'])
+        room['player']['last_update'] = datetime.utcnow().isoformat()
+    elif action == 'pause':
+        room['player']['is_playing'] = False
+        room['player']['current_time'] = data.get('current_time', room['player']['current_time'])
+        room['player']['last_update'] = datetime.utcnow().isoformat()
+    elif action == 'seek':
+        room['player']['current_time'] = data.get('current_time', 0)
+        room['player']['last_update'] = datetime.utcnow().isoformat()
 
-socket.on('user_left', (data) => {
-    updateUsers(data.users, data.max_users || maxUsers);
-    showSystemMessage(data.name + ' left');
-});
+    emit('player_sync', {
+        'action': action,
+        'video_id': room['player']['video_id'],
+        'title': room['player']['title'],
+        'is_playing': room['player']['is_playing'],
+        'current_time': room['player']['current_time'],
+        'from_sid': request.sid
+    }, room=room_id)
 
-socket.on('player_sync', (data) => {
-    if (data.from_sid === socket.id) return;
-    isSyncing = true;
 
-    if (data.action === 'load' && data.video_id) {
-        loadVideo(data.video_id, data.title, false);
-        setTimeout(() => {
-            if (player) {
-                player.seekTo(0, true);
-                player.playVideo();
-                btnPlayPause.textContent = '⏸';
-                isPlaying = true;
-            }
-            isSyncing = false;
-        }, 1000);
-        return;
-    }
+@socketio.on('chat_message')
+def handle_chat(data):
+    room_id = data.get('room_id')
+    message = data.get('message', '').strip()
+    if not message:
+        return
 
-    if (!player || !isPlayerReady) {
-        isSyncing = false;
-        return;
-    }
+    room = get_or_create_room(room_id)
+    user = room['users'].get(request.sid, {'name': 'Anonymous', 'avatar': '👤'})
 
-    if (data.action === 'play') {
-        player.seekTo(data.current_time || 0, true);
-        player.playVideo();
-        btnPlayPause.textContent = '⏸';
-        isPlaying = true;
-    } else if (data.action === 'pause') {
-        player.seekTo(data.current_time || 0, true);
-        player.pauseVideo();
-        btnPlayPause.textContent = '▶️';
-        isPlaying = false;
-    } else if (data.action === 'seek') {
-        player.seekTo(data.current_time || 0, true);
-    }
-
-    setTimeout(() => isSyncing = false, 600);
-});
-
-socket.on('new_message', (msg) => {
-    appendMessage(msg);
-});
-
-socket.on('reaction', (data) => {
-    showFloatingReaction(data.reaction, data.from);
-});
-
-function updateUsers(users, max = 10) {
-    usersList.innerHTML = '';
-    const count = users ? users.length : 0;
-    userCount.textContent = count + '/' + max;
-    if (!users || count === 0) return;
-
-    users.forEach(u => {
-        const div = document.createElement('div');
-        div.className = 'user-item';
-        div.innerHTML =
-            '<span class="user-avatar">' + (u.avatar || '👤') + '</span>' +
-            '<div><div class="user-name">' + escapeHtml(u.name) + '</div>' +
-            '<div class="user-status">● online</div></div>';
-        usersList.appendChild(div);
-    });
-}
-
-function appendMessage(msg) {
-    const div = document.createElement('div');
-    div.className = 'msg';
-    div.innerHTML =
-        '<div class="msg-header"><span class="msg-name">' + escapeHtml(msg.name) +
-        '</span><span class="msg-time">' + msg.time + '</span></div>' +
-        '<div class="msg-body">' + escapeHtml(msg.message) + '</div>';
-    chatMessages.appendChild(div);
-    chatMessages.scrollTop = chatMessages.scrollHeight;
-}
-
-function showSystemMessage(text) {
-    const div = document.createElement('div');
-    div.className = 'msg';
-    div.innerHTML =
-        '<div class="msg-body" style="text-align:center;opacity:0.7;font-size:0.85rem;">' +
-        escapeHtml(text) + '</div>';
-    chatMessages.appendChild(div);
-    chatMessages.scrollTop = chatMessages.scrollHeight;
-}
-
-function escapeHtml(text) {
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
-}
-
-function showFloatingReaction(type, from) {
-    const map = { hug: '🤗', kiss: '👋', missyou: '✨', heart: '👍' };
-    const emoji = map[type] || '✨';
-    const el = document.createElement('div');
-    el.className = 'floating-reaction';
-    el.textContent = emoji;
-    el.style.left = (20 + Math.random() * 60) + '%';
-    el.style.bottom = '80px';
-    reactionOverlay.appendChild(el);
-    setTimeout(() => el.remove(), 2600);
-}
-
-btnPlayPause.addEventListener('click', () => {
-    if (!player || !isPlayerReady || !currentVideoId) return;
-    if (isPlaying) player.pauseVideo();
-    else player.playVideo();
-});
-
-seekBar.addEventListener('input', () => {
-    if (!player || !isPlayerReady) return;
-    const duration = player.getDuration() || 1;
-    const time = (seekBar.value / 100) * duration;
-    player.seekTo(time, true);
-    emitPlayerAction('seek', { current_time: time });
-});
-
-setInterval(() => {
-    if (!player || !isPlayerReady || !currentVideoId) return;
-    try {
-        const current = player.getCurrentTime() || 0;
-        const duration = player.getDuration() || 0;
-        if (duration > 0) {
-            seekBar.value = (current / duration) * 100;
-            currentTimeEl.textContent = formatTime(current);
-            durationEl.textContent = formatTime(duration);
-        }
-    } catch (e) {}
-}, 500);
-
-function formatTime(sec) {
-    sec = Math.floor(sec);
-    const m = Math.floor(sec / 60);
-    const s = sec % 60;
-    return m + ':' + (s < 10 ? '0' : '') + s;
-}
-
-function loadVideo(videoId, title = 'Unknown', broadcast = true) {
-    currentVideoId = videoId;
-    npTitle.textContent = title || 'Playing...';
-    playerPlaceholder.style.display = 'none';
-
-    if (player && isPlayerReady) {
-        player.loadVideoById(videoId);
-    } else {
-        const check = setInterval(() => {
-            if (isPlayerReady) {
-                player.loadVideoById(videoId);
-                clearInterval(check);
-            }
-        }, 200);
+    msg = {
+        'id': str(uuid.uuid4()),
+        'name': user['name'],
+        'avatar': user['avatar'],
+        'message': message[:300],
+        'time': datetime.utcnow().strftime('%H:%M')
     }
 
-    if (broadcast) {
-        socket.emit('player_action', {
-            room_id: ROOM_ID,
-            action: 'load',
-            video_id: videoId,
-            title: title
-        });
-    }
-}
+    room['messages'].append(msg)
+    if len(room['messages']) > 200:
+        room['messages'] = room['messages'][-200:]
 
-function extractVideoId(url) {
-    const patterns = [
-        /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/|youtube\.com\/v\/|youtube\.com\/shorts\/)([a-zA-Z0-9_-]{11})/,
-        /^([a-zA-Z0-9_-]{11})$/
-    ];
-    for (const p of patterns) {
-        const match = url.match(p);
-        if (match) return match[1];
-    }
-    return null;
-}
+    save_message_to_db(room_id, msg)
+    emit('new_message', msg, room=room_id)
 
-searchBtn.addEventListener('click', handleSearch);
-searchInput.addEventListener('keypress', (e) => {
-    if (e.key === 'Enter') handleSearch();
-});
 
-function handleSearch() {
-    const q = searchInput.value.trim();
-    if (!q) return;
-    const videoId = extractVideoId(q);
-    if (videoId) {
-        loadVideo(videoId, 'YouTube Video');
-        searchInput.value = '';
-        searchResults.innerHTML = '';
-        return;
-    }
-    performSearch(q);
-}
+@socketio.on('send_reaction')
+def handle_reaction(data):
+    room_id = data.get('room_id')
+    reaction = data.get('reaction')
+    room = get_or_create_room(room_id)
+    user = room['users'].get(request.sid, {'name': 'Anonymous'})
 
-async function performSearch(query) {
-    searchResults.innerHTML = '<div style="padding:12px;color:var(--text-muted);">Searching...</div>';
-    try {
-        const instances = [
-            'https://invidious.fdn.fr',
-            'https://vid.puffyan.us',
-            'https://invidious.projectsegfau.lt'
-        ];
-        let results = null;
-        for (const base of instances) {
-            try {
-                const res = await fetch(base + '/api/v1/search?q=' + encodeURIComponent(query) + '&type=video');
-                if (res.ok) {
-                    results = await res.json();
-                    break;
-                }
-            } catch (e) {}
-        }
-        if (!results || results.length === 0) {
-            searchResults.innerHTML = '<div style="padding:14px;color:var(--text-muted);font-size:0.9rem;">Search unavailable. Paste a YouTube link instead.</div>';
-            return;
-        }
-        searchResults.innerHTML = '';
-        results.slice(0, 8).forEach(item => {
-            const div = document.createElement('div');
-            div.className = 'search-item';
-            const thumb = (item.videoThumbnails && item.videoThumbnails[3] && item.videoThumbnails[3].url) ||
-                (item.videoThumbnails && item.videoThumbnails[0] && item.videoThumbnails[0].url) || '';
-            div.innerHTML = '<img src="' + thumb + '" alt="" onerror="this.style.display=\'none\'"><div class="info"><div class="title">' +
-                escapeHtml(item.title) + '</div><div class="channel">' + escapeHtml(item.author || '') + '</div></div>';
-            div.addEventListener('click', () => {
-                loadVideo(item.videoId, item.title);
-                searchResults.innerHTML = '';
-                searchInput.value = '';
-            });
-            searchResults.appendChild(div);
-        });
-    } catch (err) {
-        searchResults.innerHTML = '<div style="padding:14px;color:var(--text-muted);font-size:0.9rem;">Could not search. Paste a YouTube link.</div>';
-    }
-}
+    emit('reaction', {
+        'from': user['name'],
+        'reaction': reaction,
+        'sid': request.sid
+    }, room=room_id)
 
-function sendMessage() {
-    const text = chatInput.value.trim();
-    if (!text) return;
-    socket.emit('chat_message', { room_id: ROOM_ID, message: text });
-    chatInput.value = '';
-}
 
-sendBtn.addEventListener('click', sendMessage);
-chatInput.addEventListener('keypress', (e) => {
-    if (e.key === 'Enter') sendMessage();
-});
+@socketio.on('set_mood')
+def handle_mood(data):
+    room_id = data.get('room_id')
+    mood = data.get('mood')
+    room = get_or_create_room(room_id)
+    user = room['users'].get(request.sid)
+    if user:
+        room['moods'][user['name']] = mood
+        room['last_seen'][user['name']] = datetime.utcnow().isoformat()
+        emit('mood_update', {
+            'name': user['name'],
+            'mood': mood,
+            'moods': room['moods'],
+            'last_seen': room['last_seen']
+        }, room=room_id)
 
-document.querySelectorAll('.react-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-        const reaction = btn.dataset.reaction;
-        socket.emit('send_reaction', { room_id: ROOM_ID, reaction });
-        showFloatingReaction(reaction, USERNAME);
-    });
-});
 
-function copyRoomCode() {
-    navigator.clipboard.writeText(ROOM_ID).then(() => {
-        showSystemMessage('Room code copied: ' + ROOM_ID);
-    }).catch(() => {
-        prompt('Copy room code:', ROOM_ID);
-    });
-}
+@socketio.on('update_notes')
+def handle_notes(data):
+    room_id = data.get('room_id')
+    text = (data.get('text') or '')[:5000]
+    room = get_or_create_room(room_id)
+    room['notes'] = text
+    emit('notes_sync', {'text': text, 'from_sid': request.sid}, room=room_id)
 
-function leaveRoom() {
-    if (confirm('Leave this room?')) {
-        socket.disconnect();
-        window.location.href = '/';
-    }
-}
 
-window.copyRoomCode = copyRoomCode;
-window.leaveRoom = leaveRoom;
-window.onYouTubeIframeAPIReady = onYouTubeIframeAPIReady;
+@socketio.on('todo_add')
+def handle_todo_add(data):
+    room_id = data.get('room_id')
+    text = (data.get('text') or '').strip()[:200]
+    if not text:
+        return
+    room = get_or_create_room(room_id)
+    item = {'id': str(uuid.uuid4()), 'text': text, 'done': False}
+    room['todos'].append(item)
+    if len(room['todos']) > 50:
+        room['todos'] = room['todos'][-50:]
+    emit('todos_sync', {'todos': room['todos']}, room=room_id)
+
+
+@socketio.on('todo_toggle')
+def handle_todo_toggle(data):
+    room_id = data.get('room_id')
+    todo_id = data.get('id')
+    room = get_or_create_room(room_id)
+    for t in room['todos']:
+        if t['id'] == todo_id:
+            t['done'] = not t['done']
+            break
+    emit('todos_sync', {'todos': room['todos']}, room=room_id)
+
+
+@socketio.on('todo_delete')
+def handle_todo_delete(data):
+    room_id = data.get('room_id')
+    todo_id = data.get('id')
+    room = get_or_create_room(room_id)
+    room['todos'] = [t for t in room['todos'] if t['id'] != todo_id]
+    emit('todos_sync', {'todos': room['todos']}, room=room_id)
+
+
+@socketio.on('heartbeat')
+def handle_heartbeat(data):
+    room_id = data.get('room_id')
+    room = get_or_create_room(room_id)
+    user = room['users'].get(request.sid)
+    if user:
+        room['last_seen'][user['name']] = datetime.utcnow().isoformat()
+        emit('last_seen_sync', {
+            'last_seen': room['last_seen'],
+            'users': list(room['users'].values()),
+            'moods': room.get('moods', {})
+        }, room=room_id)
+
+
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 5000))
+    socketio.run(app, host='0.0.0.0', port=port, debug=False, allow_unsafe_werkzeug=True)
