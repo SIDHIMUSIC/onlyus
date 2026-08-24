@@ -224,7 +224,6 @@ def handle_player_action(data):
     }, room=room_id)
 
 
-# ========== QUEUE ==========
 @socketio.on('queue_add')
 def handle_queue_add(data):
     room_id = data.get('room_id')
@@ -260,24 +259,30 @@ def handle_queue_remove(data):
 def handle_queue_next(data):
     room_id = data.get('room_id')
     room = get_or_create_room(room_id)
-    if not room['queue']:
+    if not room.get('queue'):
         emit('queue_empty', {})
         return
+
     item = room['queue'].pop(0)
     room['player']['video_id'] = item['video_id']
     room['player']['title'] = item['title']
     room['player']['is_playing'] = True
     room['player']['current_time'] = 0
     room['player']['last_update'] = datetime.utcnow().isoformat()
+
     emit('queue_sync', {'queue': room['queue']}, room=room_id)
+
+    # from_sid = None → initiator bhi load kare (Next fix)
     emit('player_sync', {
         'action': 'load',
         'video_id': item['video_id'],
         'title': item['title'],
         'is_playing': True,
         'current_time': 0,
-        'from_sid': request.sid
+        'from_sid': None
     }, room=room_id)
+
+    print(f"Queue next in {room_id}: {item['title']}")
 
 
 @socketio.on('chat_message')
