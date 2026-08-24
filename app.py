@@ -1,14 +1,33 @@
-from flask import Flask, render_template, request, session, redirect, url_for
+from flask import Flask, render_template, request
 from flask_socketio import SocketIO, emit, join_room, leave_room
 import os
 import uuid
 from datetime import datetime
+from pymongo import MongoClient
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'onlyus-bubudubu-secret-key-2026')
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
-# In-memory room state (for MVP - later can move to Redis/DB)
+# ========== MongoDB Setup ==========
+MONGO_URI = os.environ.get('MONGO_URI')
+db = None
+messages_col = None
+
+if MONGO_URI:
+    try:
+        client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
+        client.admin.command('ping')  # test connection
+        db = client['onlyus']
+        messages_col = db['messages']
+        print("✅ MongoDB Connected Successfully")
+    except Exception as e:
+        print("❌ MongoDB Connection Failed:", e)
+        db = None
+else:
+    print("⚠️ MONGO_URI not found - using in-memory only")
+
+# In-memory room state (for real-time)
 rooms = {}
 
 def get_or_create_room(room_id):
@@ -30,6 +49,47 @@ def get_or_create_room(room_id):
     return rooms[room_id]
 
 
+def save_message_to_db(room_id, msg):
+    """Save message permanently to MongoDB"""
+    if messages_col is not None:
+        try:
+            messages_col.insert_one({
+                'room_id': room_id,
+                'id': msg['id'],
+                'name': msg['name'],
+                'avatar': msg.get('avatar', '💗'),
+                'message': msg['message'],
+                'time': msg['time'],
+                'created_at': datetime.utcnow()
+            })
+        except Exception as e:
+            print("Error saving message:", e)
+
+
+def load_messages_from_db(room_id, limit=80):
+    """Load recent messages from MongoDB"""
+    if messages_col is None:
+        return []
+    try:
+        cursor = messages_col.find(
+            {'room_id': room_id}
+        ).sort('created_at', -1).limit(limit)
+        
+        messages = list(cursor)
+        messages.reverse()  # oldest first
+        
+        return [{
+            'id': m.get('id', ''),
+            'name': m.get('name', 'Anonymous'),
+            'avatar': m.get('avatar', '💗'),
+            'message': m.get('message', ''),
+            'time': m.get('time', '')
+        } for m in messages]
+    except Exception as e:
+        print("Error loading messages:", e)
+        return []
+
+
 @app.route('/')
 def index():
     return render_template('index.html')
@@ -48,7 +108,6 @@ def handle_connect():
 
 @socketio.on('disconnect')
 def handle_disconnect():
-    # Remove user from any room
     for room_id, room in list(rooms.items()):
         if request.sid in room['users']:
             username = room['users'][request.sid]['name']
@@ -79,16 +138,21 @@ def handle_join(data):
         'joined_at': datetime.utcnow().isoformat()
     }
 
-    # Send current state to the new user
+    # Load messages from MongoDB (permanent)
+    db_messages = load_messages_from_db(room_id)
+    
+    # Fallback to memory if DB empty
+    if not db_messages:
+        db_messages = room['messages'][-50:]
+
     emit('room_state', {
         'users': list(room['users'].values()),
         'player': room['player'],
         'queue': room['queue'],
-        'messages': room['messages'][-50:],  # last 50 messages
+        'messages': db_messages,
         'moods': room['moods']
     })
 
-    # Notify others
     emit('user_joined', {
         'user': room['users'][request.sid],
         'users': list(room['users'].values())
@@ -100,7 +164,7 @@ def handle_join(data):
 @socketio.on('player_action')
 def handle_player_action(data):
     room_id = data.get('room_id')
-    action = data.get('action')  # play, pause, seek, load
+    action = data.get('action')
     room = get_or_create_room(room_id)
 
     if action == 'load':
@@ -121,7 +185,6 @@ def handle_player_action(data):
         room['player']['current_time'] = data.get('current_time', 0)
         room['player']['last_update'] = datetime.utcnow().isoformat()
 
-    # Broadcast to everyone in room (including sender for consistency)
     emit('player_sync', {
         'action': action,
         'video_id': room['player']['video_id'],
@@ -149,10 +212,14 @@ def handle_chat(data):
         'message': message,
         'time': datetime.utcnow().strftime('%H:%M')
     }
+    
+    # Save to memory
     room['messages'].append(msg)
-    # Keep only last 200 messages
     if len(room['messages']) > 200:
         room['messages'] = room['messages'][-200:]
+
+    # Save permanently to MongoDB
+    save_message_to_db(room_id, msg)
 
     emit('new_message', msg, room=room_id)
 
@@ -160,7 +227,7 @@ def handle_chat(data):
 @socketio.on('send_reaction')
 def handle_reaction(data):
     room_id = data.get('room_id')
-    reaction = data.get('reaction')  # hug, kiss, missyou, heart
+    reaction = data.get('reaction')
     room = get_or_create_room(room_id)
     user = room['users'].get(request.sid, {'name': 'Anonymous'})
 
