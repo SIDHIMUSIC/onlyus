@@ -17,21 +17,23 @@
         <div class="orb orb-3"></div>
     </div>
 
-    <!-- Top Bar -->
     <header class="topbar">
         <div class="brand-mini">
-            <span class="heart">💗</span>
+            <span class="heart">✨</span>
             <span>OnlyUs</span>
         </div>
         <div class="online-status" id="onlineStatus">
             <span class="dot"></span>
-            <span id="userCount">Connecting...</span>
+            <span id="userCount">0/10</span>
         </div>
-        <div class="user-badge" id="myName">{{ username }}</div>
+        <div class="topbar-actions">
+            <button type="button" class="mini-btn" onclick="copyRoomCode()" title="Copy room code">📋 Code</button>
+            <button type="button" class="mini-btn" onclick="leaveRoom()" title="Leave">Leave</button>
+            <div class="user-badge" id="myName">{{ username }}</div>
+        </div>
     </header>
 
     <main class="room-layout">
-        <!-- Left: Player + Search -->
         <section class="player-section">
             <div class="player-card">
                 <div class="now-playing" id="nowPlaying">
@@ -66,37 +68,33 @@
                 <div class="search-results" id="searchResults"></div>
             </div>
 
-            <!-- Reactions -->
             <div class="reactions-bar">
-                <button class="react-btn" data-reaction="hug" title="Virtual Hug">🤗</button>
-                <button class="react-btn" data-reaction="kiss" title="Send Kiss">💋</button>
-                <button class="react-btn" data-reaction="missyou" title="I Miss You">🥺</button>
-                <button class="react-btn" data-reaction="heart" title="Heart">💖</button>
+                <button class="react-btn" data-reaction="hug" title="Hug">🤗</button>
+                <button class="react-btn" data-reaction="kiss" title="Hi">👋</button>
+                <button class="react-btn" data-reaction="missyou" title="Wave">✨</button>
+                <button class="react-btn" data-reaction="heart" title="Like">👍</button>
             </div>
         </section>
 
-        <!-- Right: Chat + Presence -->
         <section class="side-section">
             <div class="presence-card">
-                <h3>Together Now</h3>
+                <h3>Online now</h3>
                 <div class="users-list" id="usersList"></div>
             </div>
 
             <div class="chat-card">
                 <div class="chat-messages" id="chatMessages"></div>
                 <div class="chat-input-row">
-                    <input type="text" id="chatInput" placeholder="Say something sweet..." maxlength="300" autocomplete="off">
+                    <input type="text" id="chatInput" placeholder="Type a message..." maxlength="300" autocomplete="off">
                     <button id="sendBtn">➤</button>
                 </div>
             </div>
         </section>
     </main>
 
-    <!-- Floating reaction animation container -->
     <div id="reactionOverlay"></div>
 
     <script>
-        // Pass server data
         const ROOM_ID = "{{ room_id }}";
         const USERNAME = "{{ username }}";
     </script>
