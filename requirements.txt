@@ -3,3 +3,5 @@ flask-socketio==5.3.6
 python-socketio==5.11.3
 python-engineio==4.9.1
 gunicorn==22.0.0
+pymongo==4.10.1
+dnspython==2.7.0
