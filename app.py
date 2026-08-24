@@ -9,6 +9,8 @@ app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'onlyus-bubudubu-secret-key-2026')
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
+MAX_USERS = 10
+
 # ========== MongoDB Setup ==========
 MONGO_URI = os.environ.get('MONGO_URI')
 db = None
@@ -17,7 +19,7 @@ messages_col = None
 if MONGO_URI:
     try:
         client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
-        client.admin.command('ping')  # test connection
+        client.admin.command('ping')
         db = client['onlyus']
         messages_col = db['messages']
         print("✅ MongoDB Connected Successfully")
@@ -27,8 +29,8 @@ if MONGO_URI:
 else:
     print("⚠️ MONGO_URI not found - using in-memory only")
 
-# In-memory room state (for real-time)
 rooms = {}
+
 
 def get_or_create_room(room_id):
     if room_id not in rooms:
@@ -50,14 +52,13 @@ def get_or_create_room(room_id):
 
 
 def save_message_to_db(room_id, msg):
-    """Save message permanently to MongoDB"""
     if messages_col is not None:
         try:
             messages_col.insert_one({
                 'room_id': room_id,
                 'id': msg['id'],
                 'name': msg['name'],
-                'avatar': msg.get('avatar', '💗'),
+                'avatar': msg.get('avatar', '👤'),
                 'message': msg['message'],
                 'time': msg['time'],
                 'created_at': datetime.utcnow()
@@ -67,21 +68,16 @@ def save_message_to_db(room_id, msg):
 
 
 def load_messages_from_db(room_id, limit=80):
-    """Load recent messages from MongoDB"""
     if messages_col is None:
         return []
     try:
-        cursor = messages_col.find(
-            {'room_id': room_id}
-        ).sort('created_at', -1).limit(limit)
-        
+        cursor = messages_col.find({'room_id': room_id}).sort('created_at', -1).limit(limit)
         messages = list(cursor)
-        messages.reverse()  # oldest first
-        
+        messages.reverse()
         return [{
             'id': m.get('id', ''),
             'name': m.get('name', 'Anonymous'),
-            'avatar': m.get('avatar', '💗'),
+            'avatar': m.get('avatar', '👤'),
             'message': m.get('message', ''),
             'time': m.get('time', '')
         } for m in messages]
@@ -116,7 +112,8 @@ def handle_disconnect():
             emit('user_left', {
                 'sid': request.sid,
                 'name': username,
-                'users': list(room['users'].values())
+                'users': list(room['users'].values()),
+                'max_users': MAX_USERS
             }, room=room_id)
             print(f"{username} left room {room_id}")
             break
@@ -126,11 +123,16 @@ def handle_disconnect():
 def handle_join(data):
     room_id = data.get('room_id', 'onlyus')
     username = data.get('username', 'Anonymous')
-    avatar = data.get('avatar', '💗')
+    avatar = data.get('avatar', '👤')
 
-    join_room(room_id)
     room = get_or_create_room(room_id)
 
+    if request.sid not in room['users']:
+        if len(room['users']) >= MAX_USERS:
+            emit('room_full', {'max': MAX_USERS, 'count': len(room['users'])})
+            return
+
+    join_room(room_id)
     room['users'][request.sid] = {
         'sid': request.sid,
         'name': username,
@@ -138,10 +140,7 @@ def handle_join(data):
         'joined_at': datetime.utcnow().isoformat()
     }
 
-    # Load messages from MongoDB (permanent)
     db_messages = load_messages_from_db(room_id)
-    
-    # Fallback to memory if DB empty
     if not db_messages:
         db_messages = room['messages'][-50:]
 
@@ -150,15 +149,17 @@ def handle_join(data):
         'player': room['player'],
         'queue': room['queue'],
         'messages': db_messages,
-        'moods': room['moods']
+        'moods': room['moods'],
+        'max_users': MAX_USERS
     })
 
     emit('user_joined', {
         'user': room['users'][request.sid],
-        'users': list(room['users'].values())
+        'users': list(room['users'].values()),
+        'max_users': MAX_USERS
     }, room=room_id, include_self=False)
 
-    print(f"{username} joined room {room_id}")
+    print(f"{username} joined room {room_id} ({len(room['users'])}/{MAX_USERS})")
 
 
 @socketio.on('player_action')
@@ -203,24 +204,21 @@ def handle_chat(data):
         return
 
     room = get_or_create_room(room_id)
-    user = room['users'].get(request.sid, {'name': 'Anonymous', 'avatar': '💗'})
+    user = room['users'].get(request.sid, {'name': 'Anonymous', 'avatar': '👤'})
 
     msg = {
         'id': str(uuid.uuid4()),
         'name': user['name'],
         'avatar': user['avatar'],
-        'message': message,
+        'message': message[:300],
         'time': datetime.utcnow().strftime('%H:%M')
     }
-    
-    # Save to memory
+
     room['messages'].append(msg)
     if len(room['messages']) > 200:
         room['messages'] = room['messages'][-200:]
 
-    # Save permanently to MongoDB
     save_message_to_db(room_id, msg)
-
     emit('new_message', msg, room=room_id)
 
 
